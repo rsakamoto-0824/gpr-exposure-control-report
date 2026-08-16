@@ -1,0 +1,648 @@
+\documentclass[11pt,a4paper]{ltjsarticle}
+
+\usepackage{luatexja}
+\usepackage{luatexja-fontspec}
+\usepackage{lmodern}
+\usepackage[top=25mm,bottom=25mm,left=22mm,right=22mm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{siunitx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm}
+\usepackage{mathtools}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage[section]{placeins}
+\usepackage{enumitem}
+\usepackage[backend=biber,style=numeric,sorting=none]{biblatex}
+\usepackage{csquotes}
+
+\addbibresource{references.bib}
+
+\definecolor{ReportNavy}{HTML}{24364B}
+\definecolor{PlaceholderRed}{HTML}{B00020}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=ReportNavy,
+  citecolor=ReportNavy,
+  urlcolor=ReportNavy,
+  pdftitle={ガウス過程回帰を用いた枚葉露光量制御による線幅ばらつき改善}
+}
+
+\sisetup{detect-all,range-phrase=--,range-units=single}
+\setlist{nosep,leftmargin=2em}
+\captionsetup{font=small,labelfont=bf}
+\setlength{\parindent}{1\zw}
+\setlength{\parskip}{0.25\baselineskip}
+\renewcommand{\arraystretch}{1.2}
+\setcounter{tocdepth}{1}
+
+\newcommand{\placeholder}[1][XX]{\textcolor{PlaceholderRed}{[#1]}}
+\newcommand{\SiN}{\mathrm{SiN}}
+\newcommand{\SiOtwo}{\mathrm{SiO_2}}
+\newcommand{\GPR}{\mathrm{GPR}}
+\newcommand{\OLS}{\mathrm{OLS}}
+\newcommand{\APC}{\mathrm{APC}}
+\newcommand{\CD}{\mathrm{CD}}
+\newcommand{\safeincludegraphics}[2][]{%
+  \IfFileExists{#2.png}
+    {\includegraphics[#1]{#2.png}}
+    {\IfFileExists{#2.pdf}
+      {\includegraphics[#1]{#2.pdf}}
+      {\IfFileExists{#2.jpg}
+        {\includegraphics[#1]{#2.jpg}}
+        {\IfFileExists{#2.jpeg}
+          {\includegraphics[#1]{#2.jpeg}}
+          {\fbox{%
+            \parbox[c][50mm][c]{0.92\linewidth}{%
+              \centering
+              図ファイル未配置\\[2mm]
+              {\scriptsize\nolinkurl{#2}}\\
+              {\scriptsize\texttt{.png / .pdf / .jpg / .jpeg}}
+            }
+          }}%
+        }%
+      }%
+    }%
+}
+
+\crefname{figure}{図}{図}
+\crefname{table}{表}{表}
+\crefname{equation}{式}{式}
+
+\begin{document}
+
+\pagenumbering{arabic}
+\setcounter{page}{1}
+\tableofcontents
+\clearpage
+
+
+% =============================================================================
+% 01_introduction
+% =============================================================================
+\section{はじめに}
+\label{sec:introduction}
+
+半導体デバイスの微細化および高性能化に伴い、リソグラフィー工程における線幅（CD）管理の重要性が高まっている。形成線幅は、露光量、フォーカス、レジスト材料および現像条件だけでなく、レジスト下層に形成された膜の膜厚と光学特性にも影響を受ける\cite{mack2007}。
+
+対象工程の積層構造は、上層側からレジスト、上層SiO$_2$、SiN、下層SiO$_2$およびウェハ基板で構成される。露光光は各膜界面で反射し、各膜内を伝搬する際に位相変化を受ける。その結果、各界面からレジスト側へ戻る反射光が入射光および他の反射光と干渉し、レジスト内電場強度と実効露光量を変化させる。
+
+一般に膜厚ターゲットは、膜厚変動に対する線幅感度が小さくなるように設計される。しかし、SiN膜厚、レジスト膜厚、上層・下層SiO$_2$膜厚および各膜の屈折率変動のすべてに対して、同時に低感度となる条件を実現することは困難である。対象製品では、製品構造および工程上の制約から、SiN膜厚の想定工程変動範囲がSwing curve上の線幅感度の高い領域に位置していた。
+
+対象工程では、SiN膜厚などの露光前情報を用い、OLS線形回帰モデルでウェハごとの露光量補正値を算出する既存の枚葉フィードフォワード制御を運用していた。本検討では制御構成を維持したまま、線幅予測モデルをGPRへ変更し、学習時に実測レジスト膜厚を説明変数へ追加した。本報告は、その光学的背景、モデル構成、実験・評価方法および量産適用に向けた実装案を整理する。提案GPR制御は実験評価段階であり、量産適用実績はまだない。
+
+
+% =============================================================================
+% 02_structural_color
+% =============================================================================
+\section{構造色とリソグラフィー工程}
+\label{sec:structural-color}
+
+材料の色素ではなく、微細構造による光の反射・干渉によって生じる色を構造色という\cite{kinoshita2008}。微細構造の各界面から反射した光は互いに重なり合い、位相がそろう波長では強め合い、位相が反対に近い波長では弱め合う。
+
+リソグラフィー工程では露光波長が固定されている。したがって、可視光のどの波長が強く見えるかではなく、固定された露光波長において、レジスト内部の電場強度がどの程度強められ、または弱められるかが重要となる。
+
+レジスト内電場強度に対応する光強度を $I_{\mathrm{R}}$、積層膜の光学条件を $q$ とすると、光強度は\cref{eq:intensity-condition}で表される。
+\begin{equation}
+  I_{\mathrm{R}}=I_{\mathrm{R}}(q)
+  \label{eq:intensity-condition}
+\end{equation}
+その応答が極大または極小となる条件では、\cref{eq:stationary-condition}が成立する。
+\begin{equation}
+  \frac{\partial I_{\mathrm{R}}}{\partial q}\approx 0
+  \label{eq:stationary-condition}
+\end{equation}
+この近傍では応答曲線の傾きが小さく、膜厚または屈折率がわずかに変動しても、レジスト内電場強度の変化は小さい。このため、単一露光波長における極大または極小の近傍を設計点とすることが、膜厚変動に対する基本的なロバスト設計となる。この導入からロバスト設計までの対応を\cref{fig:structural-color-robust}に示す。
+
+\begin{figure}[tbp]
+  \centering
+  \safeincludegraphics[width=0.92\linewidth]{figures/structural_color_robust_design}
+  \caption{構造色の光干渉から膜厚変動に対するロバスト設計への展開}
+  \label{fig:structural-color-robust}
+\end{figure}
+
+
+% =============================================================================
+% 03_optical_thickness
+% =============================================================================
+\section{対象積層構造と光学膜厚}
+\label{sec:optical-thickness}
+
+対象工程の積層構造を\cref{fig:layer-stack}に示す。上層側からレジスト、上層SiO$_2$、SiN、下層SiO$_2$およびウェハ基板の順に構成される。主な反射界面は、レジスト／上層SiO$_2$、上層SiO$_2$／SiN、SiN／下層SiO$_2$、および下層SiO$_2$／ウェハ基板の各界面である。
+
+\begin{figure}[tbp]
+  \centering
+  \safeincludegraphics[width=0.92\linewidth]{figures/layer_stack}
+  \caption{対象工程の積層構造と各界面からの反射}
+  \label{fig:layer-stack}
+\end{figure}
+
+膜中を伝搬する光が受ける位相変化は、物理膜厚だけでなく屈折率にも依存する\cite{macleod2010}。膜 $j$ の物理膜厚を $t_j$、屈折率を $n_j$ とすると、垂直入射時の光学膜厚 $L_{\mathrm{opt},j}$ は\cref{eq:optical-thickness}で表される。
+\begin{equation}
+  L_{\mathrm{opt},j}=n_jt_j
+  \label{eq:optical-thickness}
+\end{equation}
+光学膜厚は、光が膜中を伝搬するときの実効的な光路長に相当する。その微小変化は\cref{eq:optical-thickness-change}で近似される。
+\begin{equation}
+  \Delta L_{\mathrm{opt},j}
+  \approx n_j\Delta t_j+t_j\Delta n_j
+  \label{eq:optical-thickness-change}
+\end{equation}
+したがって、物理膜厚が一定であっても屈折率が変化すれば、反射光の位相およびレジスト内電場強度は変化する。
+
+真空中の露光波長を $\lambda_0$ とすると、膜 $j$ を一方向に伝搬する光の位相変化 $\delta_j$ は\cref{eq:one-way-phase}、膜内を往復する反射光の位相変化は\cref{eq:round-trip-phase}で表される。
+\begin{equation}
+  \delta_j=\frac{2\pi}{\lambda_0}n_jt_j
+  \label{eq:one-way-phase}
+\end{equation}
+\begin{equation}
+  2\delta_j=\frac{4\pi}{\lambda_0}n_jt_j
+  \label{eq:round-trip-phase}
+\end{equation}
+なお、積層膜の光学状態を考える際は、光学膜厚による位相だけでなく、各界面の屈折率差によって生じる反射の大きさも考慮する必要がある。
+
+
+% =============================================================================
+% 04_cd_variation
+% =============================================================================
+\section{各膜界面の反射とレジスト内電場強度}
+\label{sec:interface-reflection}
+
+媒質 $i$ から媒質 $j$ へ光が垂直に入射する場合、界面の振幅反射係数 $r_{ij}$ は概念的に\cref{eq:reflection-coefficient}で表される。
+\begin{equation}
+  r_{ij}=\frac{n_i-n_j}{n_i+n_j}
+  \label{eq:reflection-coefficient}
+\end{equation}
+反射の大きさは隣接する材料間の屈折率差に依存する。また、下層SiO$_2$／ウェハ基板界面から反射した光も、下層SiO$_2$、SiNおよび上層SiO$_2$を通過してレジスト側へ戻る。
+
+したがって、レジスト内の光学状態は特定の一界面の反射だけではなく、積層膜全体の各界面から戻る反射光の干渉によって決まる。レジスト内部の電場 $E_{\mathrm{R}}$ は、入射光 $E_{\mathrm{incident}}$ と各界面から戻る反射光 $E_{\mathrm{reflected},m}$ の重ね合わせとして\cref{eq:resist-field}で概念的に表される。
+\begin{equation}
+  E_{\mathrm{R}}
+  =E_{\mathrm{incident}}
+  +\sum_m E_{\mathrm{reflected},m}
+  \label{eq:resist-field}
+\end{equation}
+レジスト内光強度は\cref{eq:resist-intensity}で表される。
+\begin{equation}
+  I_{\mathrm{R}}=\lvert E_{\mathrm{R}}\rvert^2
+  \label{eq:resist-intensity}
+\end{equation}
+
+\section{Swing curveと線幅変動}
+\label{sec:swing-curve}
+
+SiN物理膜厚 $t_{\mathrm{SiN}}$ が変化すると、SiNの光学膜厚 $n_{\mathrm{SiN}}t_{\mathrm{SiN}}$ が変化する。その結果、SiNより下側の界面から戻る反射光を含む、積層膜全体の位相関係が変化する。これにより、レジスト内電場強度、実効露光量および形成線幅が変化する。この因果連鎖を\cref{fig:sin-to-cd}に示す。
+
+\begin{figure}[tbp]
+  \centering
+  \safeincludegraphics[width=0.92\linewidth]{figures/sin_thickness_to_cd}
+  \caption{SiN膜厚変動から線幅変動までの流れ}
+  \label{fig:sin-to-cd}
+\end{figure}
+
+膜厚に対してレジスト内光強度または形成線幅をプロットすると、周期的な応答が現れる。この関係をSwing curveと呼ぶ。レジスト内光強度をSiN膜厚の関数とすると\cref{eq:intensity-sin-thickness}、設計点近傍の光強度変化は\cref{eq:intensity-sensitivity}で表される。
+\begin{equation}
+  I_{\mathrm{R}}=I_{\mathrm{R}}\!\left(t_{\mathrm{SiN}}\right)
+  \label{eq:intensity-sin-thickness}
+\end{equation}
+\begin{equation}
+  \Delta I_{\mathrm{R}}
+  \approx
+  \frac{\partial I_{\mathrm{R}}}{\partial t_{\mathrm{SiN}}}
+  \Delta t_{\mathrm{SiN}}
+  \label{eq:intensity-sensitivity}
+\end{equation}
+極大または極小となる点では\cref{eq:sin-stationary-condition}が成立する。
+\begin{equation}
+  \frac{\partial I_{\mathrm{R}}}{\partial t_{\mathrm{SiN}}}\approx 0
+  \label{eq:sin-stationary-condition}
+\end{equation}
+この近傍ではSiN膜厚が変動しても、レジスト内光強度および形成線幅は変化しにくい。一方、極大と極小の中間に位置する傾きの大きい領域では、わずかなSiN膜厚変動でも線幅が大きく変化する。ただし、SiN膜厚に対して低感度となる条件が、レジスト膜厚、他の膜厚および各膜の屈折率変動に対しても低感度になるとは限らない。
+
+
+% =============================================================================
+% 05_existing_control
+% =============================================================================
+\section{既存の枚葉露光量制御}
+\label{sec:existing-control}
+
+対象工程では、露光前に取得可能な工程情報を用いて、ウェハごとの露光量を補正する枚葉フィードフォワード制御を既に運用していた。半導体製造におけるRun-to-Run制御およびAPCの一般的な考え方は文献\cite{moyne2001}に整理されている。既存制御では、SiN膜厚などの露光前情報を入力とするOLS線形回帰モデルを使用していた。
+
+既存モデルは、最小二乗法による線形回帰\cite{draper1998}として、\cref{eq:ols-model}のように概念化できる。
+\begin{equation}
+  \widehat{\CD}_{\mathrm{OLS}}
+  =\beta_0+\beta_1t_{\mathrm{SiN}}+\beta_2D+\sum_j\beta_jx_j
+  \label{eq:ols-model}
+\end{equation}
+ここで、$\widehat{\CD}_{\mathrm{OLS}}$ はOLSモデルによる予測線幅、$D$ は露光量、$x_j$ はその他の説明変数、$\beta_j$ は回帰係数を表す。既存OLSモデルは構造が単純で、量産システムへ実装しやすい。
+
+一方、積層膜全体の光干渉に由来する線幅応答は、\ref{sec:swing-curve}章に示したように曲線的である。このため、線形モデルでは想定工程変動範囲の応答を十分に表現できない場合があった。また、既存OLSモデルはレジスト膜厚を説明変数に含めていなかった。レジスト膜厚が変化するとレジスト自身の光学膜厚が変化するため、その影響はモデルで説明されない残差に含まれていた。
+
+
+% =============================================================================
+% 06_gpr_model
+% =============================================================================
+\section{提案するガウス過程回帰モデル}
+\label{sec:gpr-model}
+
+本検討では、枚葉フィードフォワード制御およびAPCの基本構成を変更せず、線幅予測モデルをOLSからGPRへ変更した。主な目的は、Swing curveに由来する非線形な線幅応答を表現すること、および学習時の説明変数にレジスト膜厚を追加することである。
+
+ウェハ $i$ の線幅 $\CD_i$ は\cref{eq:cd-observation}、GPRにおける関数 $f$ は\cref{eq:gpr-prior}で表される\cite{rasmussen2006}。
+\begin{equation}
+  \CD_i=f(\bm{x}_i)+\varepsilon_i
+  \label{eq:cd-observation}
+\end{equation}
+\begin{equation}
+  f(\bm{x})\sim
+  \mathcal{GP}\!\left(m(\bm{x}),k(\bm{x},\bm{x}')\right)
+  \label{eq:gpr-prior}
+\end{equation}
+ここで、$\bm{x}_i$ は説明変数ベクトル、$\varepsilon_i$ は観測誤差、$m(\bm{x})$ は平均関数、$k(\bm{x},\bm{x}')$ はカーネル関数を表す。カーネル種類とハイパーパラメータは未提示のため、最終版で明記する。
+
+GPRは、曲線的な線幅応答を滑らかに表現し、予測値と予測不確かさを出力できる。また、150枚程度の中規模データに適用しやすく、既存の枚葉制御システムへ組み込みやすいことから採用した。
+
+\subsection{学習時と制御時のレジスト膜厚}
+
+モデル学習時は、各学習ウェハに対応する実測レジスト膜厚を\cref{eq:resist-training}のように入力する。
+\begin{equation}
+  t_{\mathrm{R}}=t_{\mathrm{R,measured}}
+  \label{eq:resist-training}
+\end{equation}
+一方、露光量を算出する時点では、対象ウェハの実際のレジスト膜厚は不明である。そのため、制御時は\cref{eq:resist-control}のように製品ごとのレジスト膜厚狙い値を入力する。
+\begin{equation}
+  t_{\mathrm{R}}=t_{\mathrm{R,target}}
+  \label{eq:resist-control}
+\end{equation}
+したがって、制御時に算出する露光量は、「対象ウェハの下層膜条件に対し、レジスト膜厚が狙い値で形成された場合に、目標線幅を得るために必要な露光量」を意味する。制御フローを\cref{fig:gpr-control-flow}に示す。
+
+\begin{figure}[tbp]
+  \centering
+  \safeincludegraphics[width=0.92\linewidth]{figures/gpr_wafer_control_flow}
+  \caption{GPRによる枚葉露光量制御フロー}
+  \label{fig:gpr-control-flow}
+\end{figure}
+
+
+% =============================================================================
+% 07_experiment
+% =============================================================================
+\section{実験方法}
+\label{sec:experiment}
+
+実験はモデル構築・比較検証と制御効果評価の2段階で実施した。モデル構築・比較検証には150枚のモデリングデータを使用し、膜厚、屈折率、露光量および線幅の関係を学習するとともに、既存OLSと提案GPRのモデル性能を比較検証した。制御効果評価には、モデル学習に使用していない独立した16枚のウェハを使用し、その同じ16枚を後続工程までそのまま流動してイメージセンサー特性を評価した。ウェハ数の内訳を\cref{tab:wafer-count}に示す。
+
+\begin{table}[tbp]
+  \centering
+  \caption{実験に使用したウェハ数}
+  \label{tab:wafer-count}
+  \begin{tabularx}{0.88\linewidth}{@{}X r X@{}}
+    \toprule
+    用途 & ウェハ数 & 使用目的 \\
+    \midrule
+    モデリング用 & 150枚 & OLS・GPRの構築および比較検証 \\
+    制御評価用 & 16枚 & 制御効果と同一ウェハのセンサー特性評価 \\
+    \midrule
+    合計 & 166枚 & --- \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+モデリング用150枚について、取得可能なSiN膜厚、上層SiO$_2$膜厚、下層SiO$_2$膜厚、レジスト膜厚、各膜の屈折率または管理上の代表値、実設定露光量、実測線幅、製品情報、成膜装置またはチャンバー情報、露光装置情報および処理時期を使用した。取得できない項目には工程管理上の狙い値または代表値を使用した。ただし、代表値を使用した項目はウェハ間差を直接説明する変数ではない。
+
+モデリングデータの分布および基本的な関係を確認するため、\cref{fig:thickness-histograms,fig:thickness-cd-scatter}のグラフを最終版で配置する。
+
+\begin{figure}[p]
+  \centering
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \safeincludegraphics[width=\linewidth]{figures/sin_thickness_histogram}
+    \caption{SiN膜厚のヒストグラム}
+    \label{fig:sin-thickness-histogram}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \safeincludegraphics[width=\linewidth]{figures/resist_thickness_histogram}
+    \caption{レジスト膜厚のヒストグラム}
+    \label{fig:resist-thickness-histogram}
+  \end{subfigure}
+  \caption{モデリングデータの膜厚分布（図ファイル未配置）}
+  \label{fig:thickness-histograms}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \safeincludegraphics[width=\linewidth]{figures/sin_thickness_vs_cd}
+    \caption{SiN膜厚と線幅}
+    \label{fig:sin-thickness-vs-cd}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \safeincludegraphics[width=\linewidth]{figures/resist_thickness_vs_cd}
+    \caption{レジスト膜厚と線幅}
+    \label{fig:resist-thickness-vs-cd}
+  \end{subfigure}
+  \caption{膜厚と線幅の関係（図ファイル未配置）}
+  \label{fig:thickness-cd-scatter}
+\end{figure}
+
+
+% =============================================================================
+% 08_evaluation
+% =============================================================================
+\section{評価方法}
+\label{sec:evaluation}
+
+既存OLSと提案GPRのモデル性能比較は、150枚のモデリングデータによって検証する。一方、評価用16枚はモデル学習に使用していない独立データとする。制御効果は、線幅平均値、目標線幅からの平均偏差、ウェハ間標準偏差、線幅3$\sigma$、最大値--最小値、規格外率、Cpk、およびSiN膜厚と線幅の回帰傾きで評価する。ばらつき改善率は\cref{eq:improvement-rate}で算出する。
+\begin{equation}
+  \text{改善率}
+  =\frac{\sigma_{\mathrm{existing}}-\sigma_{\mathrm{proposed}}}
+  {\sigma_{\mathrm{existing}}}\times 100
+  \label{eq:improvement-rate}
+\end{equation}
+
+モデルの予測性能は、150枚のモデリングデータを対象に、RMSE、MAE、決定係数 $R^2$、最大絶対誤差および平均予測標準偏差で評価する。実測線幅とGPR予測線幅の対応、およびOLSとGPRの残差比較は\cref{fig:model-evaluation-plots}に配置する。
+
+\begin{figure}[p]
+  \centering
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \safeincludegraphics[width=\linewidth]{figures/measured_vs_gpr_predicted_cd}
+    \caption{実測線幅とGPR予測線幅}
+    \label{fig:measured-vs-gpr}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \safeincludegraphics[width=\linewidth]{figures/ols_vs_gpr_residuals}
+    \caption{OLSとGPRの残差比較}
+    \label{fig:ols-vs-gpr-residuals}
+  \end{subfigure}
+  \caption{150枚のモデリングデータによる線幅予測モデルの評価図（図ファイル未配置）}
+  \label{fig:model-evaluation-plots}
+\end{figure}
+
+評価用の独立16枚は、線幅評価後も同じウェハを後続工程までそのまま流動し、イメージセンサー特性まで評価する。センサー特性は線幅以外の工程因子にも影響を受けるため、線幅改善のみを特性改善の唯一の原因とは断定しない。同じ16枚で線幅ばらつきとセンサー特性ばらつきがともに改善した場合は、線幅安定化が特性安定化に寄与した可能性があると評価する。
+
+
+% =============================================================================
+% 09_results
+% =============================================================================
+\section{実験結果}
+\label{sec:results}
+
+本節に示す結果は実験評価によるものであり、提案GPR制御の量産実績ではない。実験結果の実数値は未提示であるため、本節の表にはプレースホルダーを設けた。モデリングデータの分布と関係は\cref{fig:thickness-histograms,fig:thickness-cd-scatter}、モデル予測の対応と残差は\cref{fig:model-evaluation-plots}に配置する。
+
+\subsection{150枚のモデリングデータによるOLS・GPR比較}
+
+150枚のモデリングデータによるGPRの予測性能を\cref{tab:gpr-performance}、同じ150枚を用いた既存OLSと提案GPRの比較を\cref{tab:model-comparison}に示す。最終版で、実測値と評価条件を入力する。
+
+\begin{table}[tbp]
+  \centering
+  \caption{GPRモデルの予測性能}
+  \label{tab:gpr-performance}
+  \begin{tabular}{@{}lr@{}}
+    \toprule
+    指標 & 結果 \\
+    \midrule
+    RMSE & \placeholder \\
+    MAE & \placeholder \\
+    $R^2$ & \placeholder \\
+    最大絶対誤差 & \placeholder \\
+    平均予測標準偏差 & \placeholder \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[tbp]
+  \centering
+  \caption{150枚のモデリングデータによる既存OLSと提案GPRのモデル性能比較}
+  \label{tab:model-comparison}
+  \small
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    指標 & 既存OLS & 提案GPR & 改善率 \\
+    \midrule
+    RMSE & \placeholder & \placeholder & \placeholder[XX\%] \\
+    MAE & \placeholder & \placeholder & \placeholder[XX\%] \\
+    $R^2$ & \placeholder & \placeholder & --- \\
+    最大絶対誤差 & \placeholder & \placeholder & \placeholder[XX\%] \\
+    推定補正後3$\sigma$ & \placeholder & \placeholder & \placeholder[XX\%] \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{独立16枚による制御効果}
+
+モデル学習に使用していない独立16枚による線幅評価結果の入力欄を\cref{tab:cd-control-results}に示す。実数値は未提示であるが、実験では既存制御と比較して線幅ばらつきの低減を確認した。線幅分布と評価用16枚の露光量補正値は\cref{fig:cd-control-plots}に配置する。
+
+\begin{table}[tbp]
+  \centering
+  \caption{評価用16枚の線幅結果}
+  \label{tab:cd-control-results}
+  \small
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    指標 & 既存OLS制御 & 提案GPR制御 & 改善率 \\
+    \midrule
+    線幅平均値 & \placeholder & \placeholder & --- \\
+    目標値からの平均偏差 & \placeholder & \placeholder & \placeholder[XX\%] \\
+    ウェハ間標準偏差 & \placeholder & \placeholder & \placeholder[XX\%] \\
+    線幅3$\sigma$ & \placeholder & \placeholder & \placeholder[XX\%] \\
+    最大値--最小値 & \placeholder & \placeholder & \placeholder[XX\%] \\
+    規格外率 & \placeholder & \placeholder & \placeholder[XX\%] \\
+    Cpk & \placeholder & \placeholder & \placeholder[XX\%] \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[p]
+  \centering
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \safeincludegraphics[width=\linewidth]{figures/ols_vs_gpr_cd_distribution}
+    \caption{OLS制御とGPR制御の線幅分布}
+    \label{fig:ols-vs-gpr-cd-distribution}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \safeincludegraphics[width=\linewidth]{figures/evaluation_16w_dose_corrections}
+    \caption{評価用16枚の露光量補正値}
+    \label{fig:evaluation-dose-corrections}
+  \end{subfigure}
+  \caption{独立16枚の制御結果図（図ファイル未配置）}
+  \label{fig:cd-control-plots}
+\end{figure}
+
+\subsection{同じ独立16枚のイメージセンサー特性}
+
+線幅評価に使用した独立16枚を後続工程までそのまま流動し、同じ16枚のイメージセンサー特性を評価した。その評価結果の入力欄を\cref{tab:sensor-results}に示す。実数値は未提示であるが、実験ではセンサー特性ばらつきの改善を確認した。線幅とセンサー特性の関係および制御方式別の特性分布は\cref{fig:sensor-plots}に配置する。
+
+\begin{table}[tbp]
+  \centering
+  \caption{線幅評価と同じ独立16枚のイメージセンサー特性結果}
+  \label{tab:sensor-results}
+  \small
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    指標 & 既存OLS制御 & 提案GPR制御 & 改善率 \\
+    \midrule
+    特性平均値 & \placeholder & \placeholder & --- \\
+    目標値からの平均偏差 & \placeholder & \placeholder & \placeholder[XX\%] \\
+    ウェハ間標準偏差 & \placeholder & \placeholder & \placeholder[XX\%] \\
+    特性3$\sigma$ & \placeholder & \placeholder & \placeholder[XX\%] \\
+    規格外率 & \placeholder & \placeholder & \placeholder[XX\%] \\
+    Cpk & \placeholder & \placeholder & \placeholder[XX\%] \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[p]
+  \centering
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \safeincludegraphics[width=\linewidth]{figures/cd_vs_sensor_property}
+    \caption{線幅とイメージセンサー特性の関係}
+    \label{fig:cd-vs-sensor-property}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \safeincludegraphics[width=\linewidth]{figures/ols_vs_gpr_sensor_distribution}
+    \caption{OLS制御とGPR制御のセンサー特性分布}
+    \label{fig:ols-vs-gpr-sensor-distribution}
+  \end{subfigure}
+  \caption{イメージセンサー特性の評価図（図ファイル未配置）}
+  \label{fig:sensor-plots}
+\end{figure}
+
+
+% =============================================================================
+% 10_discussion
+% =============================================================================
+\section{考察}
+\label{sec:discussion}
+
+\ref{sec:structural-color}章で示した構造色は、微細構造の各界面からの反射光が干渉し、特定波長が強められる現象である。この光学原理は、リソグラフィー工程における積層膜干渉の導入となる。ただし、本工程で重要なのは可視色ではなく、固定された単一露光波長におけるレジスト内電場強度である。その応答が極大または極小となる近傍は、応答曲線の傾きが小さく、膜厚変動に対してロバストな設計点となる。
+
+対象積層では、SiN膜厚、レジスト膜厚、上層・下層SiO$_2$膜厚および各膜の屈折率が光学条件に影響する。すべての変動に対して同時に低感度となる積層膜条件の設計は困難である。本手法は積層膜設計を代替するものではなく、設計後に残存する感度を、ウェハごとの露光量補正で補完する技術と位置付けられる。
+
+既存OLSと提案GPRのモデル性能は、150枚のモデリングデータによって比較検証した。既存OLSは線幅応答を線形に近似するのに対し、提案GPRはSwing curveに由来する非線形な応答を滑らかに表現できる。モデル性能の改善度は、最終版の\cref{tab:model-comparison}に評価指標の実数値を入力して示す必要がある。また、GPRが出力する予測不確かさは、将来の量産適用時にモデルの適用可否を判断するための情報となる。150枚は中規模のGPRモデルに適用しやすい現実的なデータ規模であるが、モデル性能は枚数だけでは決まらない。SiN膜厚、レジスト膜厚、露光量および対象工程条件について、モデリングデータが適用を想定する工程範囲を包含していることが重要である。
+
+既存OLSはレジスト膜厚を説明変数としていなかった。提案GPRでは学習時に実測レジスト膜厚を使用することで、学習データ中のレジスト膜厚変動を考慮する。ただし、制御時には実測値ではなくレジスト膜厚狙い値を用いる。したがって、提案方式は実際のレジスト膜厚変動をウェハごとに補正するものではない。
+
+モデル学習に使用していない独立16枚は、提案制御の初期実証に用いた。線幅評価後も同じ16枚を後続工程までそのまま流動し、イメージセンサー特性まで確認した。線幅ばらつきに加えてセンサー特性ばらつきも改善したことは、工程指標の安定化が製品特性の安定化につながる可能性を示す。ただし、センサー特性は線幅以外の工程因子にも影響を受けるため、線幅改善だけを唯一の原因と断定せず、寄与の可能性として扱う。また、この16枚は実験評価であり、量産適用実績ではない。量産適用後の長期安定性を確認するには、複数ロット、複数期間および複数装置を含む継続評価が必要である。
+
+
+% =============================================================================
+% 11_implementation
+% =============================================================================
+\section{量産適用に向けた実装案}
+\label{sec:implementation}
+
+提案GPR制御には、現時点で量産適用実績がない。本節では、将来の量産適用時に想定するシステム構成を実装案として示す。想定システムは、膜厚計測装置、工程データベース、製造実行システム、GPR推論機能、APCシステム、露光装置、線幅計測装置およびイメージセンサー特性評価システムで構成する。これらの関係を\cref{fig:production-architecture}に示す。
+
+\begin{figure}[tbp]
+  \centering
+  \safeincludegraphics[width=0.92\linewidth]{figures/production_system_flow}
+  \caption{量産適用時に想定する構成要素と情報フロー}
+  \label{fig:production-architecture}
+\end{figure}
+
+露光時は、対象ウェハの露光前情報と製品ごとのレジスト膜厚狙い値をGPR推論機能に入力する。GPRの推奨露光量から枚葉補正量を算出し、APCを介して露光装置に登録する。露光後の線幅実績および後続工程後のセンサー特性実績は、モデルと制御効果を継続的に確認するために保存する。
+
+保存すべき主な情報を\cref{tab:production-records}に示す。
+
+\begin{longtable}{@{}p{0.25\linewidth}p{0.67\linewidth}@{}}
+  \caption{量産適用時に保存する情報（案）}
+  \label{tab:production-records}\\
+  \toprule
+  分類 & 保存項目 \\
+  \midrule
+  \endfirsthead
+  \multicolumn{2}{l}{\small\textit{前ページからの続き}}\\
+  \toprule
+  分類 & 保存項目 \\
+  \midrule
+  \endhead
+  \midrule
+  \multicolumn{2}{r}{\small\textit{次ページへ続く}}\\
+  \endfoot
+  \bottomrule
+  \endlastfoot
+  識別情報 & ロットID、ウェハID、製品名、レイヤー名 \\
+  露光前情報 & SiN膜厚、上層SiO$_2$膜厚、下層SiO$_2$膜厚、レジスト膜厚狙い値、各膜の屈折率または代表値 \\
+  制御情報 & 基準露光量、推奨露光量、実設定露光量、枚葉補正量、補正適用可否、補正停止理由 \\
+  モデル情報 & 予測線幅、予測不確かさ、モデルバージョン \\
+  実績情報 & 線幅実績、イメージセンサー特性実績 \\
+\end{longtable}
+
+
+% =============================================================================
+% 12_future_work
+% =============================================================================
+\section{今後の課題}
+\label{sec:future-work}
+
+線幅評価からイメージセンサー特性評価まで同じ独立16枚を追跡した結果は初期実証であり、量産適用実績はまだない。量産適用後の長期安定性を確認するには、評価範囲の拡大が必要である。今後の課題を以下に示す。
+
+\begin{itemize}
+  \item 評価ウェハ数の拡大
+  \item 複数ロットでの再現性確認
+  \item 量産適用後の長期データでの評価
+  \item レジスト膜厚推定値の利用
+  \item 屈折率代表値の更新
+  \item モデル適用範囲の監視
+  \item 学習範囲外データの検出
+  \item 製品別または製品群別モデルの管理
+  \item イメージセンサー特性を含む最適化
+\end{itemize}
+
+特に、学習データが量産適用を想定する工程範囲を継続的に包含するかを確認する必要がある。また、信頼できるレジスト膜厚推定値が得られる場合は、制御への適用を検討する。
+
+
+% =============================================================================
+% 13_conclusion
+% =============================================================================
+\clearpage
+\section{まとめ}
+\label{sec:conclusion}
+
+本報告では、積層膜干渉に起因する線幅変動に対し、既存の枚葉フィードフォワード制御の線幅予測モデルをOLSからGPRへ変更する方式を整理した。結論を以下に示す。
+
+\begin{enumerate}[itemsep=0.25\baselineskip]
+  \item 構造色の光干渉を、単一露光波長における光学条件の導入として使用した。
+  \item レジスト内電場強度の極大・極小付近は、膜厚変動に対して低感度である。
+  \item 対象積層は、レジスト、上層SiO$_2$、SiN、下層SiO$_2$およびWaferである。
+  \item 光学条件の理解には、各膜の光学膜厚と、屈折率差によって各界面に生じる反射の両方を考慮する必要がある。
+  \item すべての膜厚および屈折率変動に対する同時ロバスト化は困難である。
+  \item 対象製品では、SiN膜厚変動に対する線幅感度が残存していた。
+  \item 既存の枚葉露光量制御はOLS線形回帰モデルを使用し、レジスト膜厚を説明変数に含めていなかった。
+  \item 提案方式はGPRを採用し、学習時に実測レジスト膜厚を使用した。制御時にはレジスト膜厚狙い値を使用する。
+  \item 150枚のモデリングデータで既存OLSと提案GPRを比較検証し、学習に使用していない独立16枚で制御効果を評価した。
+  \item 評価用の同じ16枚を後続工程までそのまま流動し、イメージセンサー特性まで確認した。実験では線幅ばらつきとセンサー特性ばらつきが改善した。改善率等の実数値は未提示であり、最終版で入力する。
+  \item 本結果は実験評価によるものであり、提案GPR制御の量産適用実績はまだない。
+\end{enumerate}
+
+
+\clearpage
+\section{謝辞}
+
+本検討の実施にあたり、実験ウェハの処理、膜厚・線幅計測、イメージセンサー特性評価および量産適用に向けた実装検討にご協力いただいた関係部門の皆様に、深く感謝申し上げる。
+
+\printbibliography[heading=bibnumbered,title={参考文献}]
+
+\end{document}

@@ -1,0 +1,35 @@
+\documentclass[11pt,a4paper]{ltjsarticle}
+
+\usepackage{luatexja}
+\usepackage{luatexja-fontspec}
+\usepackage{lmodern}
+\usepackage[top=25mm,bottom=25mm,left=22mm,right=22mm]{geometry}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\definecolor{PlaceholderRed}{HTML}{B00020}
+\newcommand{\placeholder}[1][XX]{\textcolor{PlaceholderRed}{[#1]}}
+
+\hypersetup{
+  hidelinks,
+  pdftitle={ガウス過程回帰を用いた枚葉露光量制御による線幅ばらつき改善（表紙）}
+}
+
+\title{\textbf{ガウス過程回帰を用いた枚葉露光量制御による\\線幅ばらつき改善}}
+\author{作成部門：\placeholder[部門名]\\作成者：\placeholder[氏名]}
+\date{\placeholder[作成日]}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+\vfill
+\begin{center}
+  \fbox{\parbox{0.82\linewidth}{
+    \centering
+    本文書は企業内の技術検討用である。\\
+    未確定値は、最終版発行前に更新すること。
+  }}
+\end{center}
+
+\end{document}
